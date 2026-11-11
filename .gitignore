@@ -1,0 +1,23 @@
+# Local task state, document drafts and downloaded tools
+.work/
+.tools/
+
+# Dependencies and build output
+node_modules/
+dist/
+out/
+coverage/
+*.vsix
+*.log
+*.tsbuildinfo
+
+# Local secrets and configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Operating system files
+.DS_Store
+Thumbs.db
