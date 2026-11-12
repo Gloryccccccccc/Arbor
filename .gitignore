@@ -1,6 +1,8 @@
 # Local task state, document drafts and downloaded tools
 .work/
 .tools/
+.arbor/
+.vitest/
 
 # Project design documents are maintained locally and in Feishu
 /docs/
