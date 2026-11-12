@@ -1,6 +1,8 @@
-# Agent Harness
+# Arbor
 
-独立开发的本地编码 Agent Harness，计划提供命令行交互和 SDK，支持代码阅读与修改、工具执行、会话续接和上下文压缩。
+An extensible runtime for coding agents.
+
+Arbor 是独立开发的轻量编码 Agent Harness，围绕会话分支、上下文压缩和可扩展工具执行，计划提供命令行交互和 SDK，支持代码阅读、修改与调试。
 
 **项目处于设计阶段，核心代码与可安装版本尚未完成。**
 
