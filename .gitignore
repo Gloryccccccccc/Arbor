@@ -2,6 +2,9 @@
 .work/
 .tools/
 
+# Project design documents are maintained locally and in Feishu
+/docs/
+
 # Dependencies and build output
 node_modules/
 dist/
