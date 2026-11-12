@@ -10,9 +10,9 @@ import { workspace } from "./helpers.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
-function invoke(args: string[], env: NodeJS.ProcessEnv = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function invoke(args: string[], env: NodeJS.ProcessEnv = {}, envFile?: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolveExit, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", cli, ...args], {
+    const child = spawn(process.execPath, [...(envFile ? ["--env-file=" + envFile] : []), "--import", "tsx", cli, ...args], {
       cwd: root, env: { ...process.env, ARBOR_PROVIDER: "deepseek", ARBOR_API_KEY: undefined, ARBOR_MODEL: undefined, ARBOR_BASE_URL: undefined, DASHSCOPE_API_KEY: undefined, DASHSCOPE_MODEL: undefined, DASHSCOPE_BASE_URL: undefined, DEEPSEEK_MODEL: undefined, DEEPSEEK_BASE_URL: undefined, DEEPSEEK_API_KEY: "", ...env }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
     });
     let stdout = "", stderr = "";
@@ -35,6 +35,50 @@ async function body(request: IncomingMessage): Promise<{ messages: Record<string
 }
 
 describe("CLI", () => {
+  it("uses a local env file with Responses and resumes encrypted tool history through a real HTTP endpoint", async () => {
+    const cwd = await workspace();
+    await writeFile(join(cwd, "source.txt"), "responses evidence");
+    const inputs: (Record<string, unknown> & { input: Record<string, unknown>[] })[] = [];
+    const paths: string[] = [];
+    const reasoning = { type: "reasoning", id: "rs", summary: [], encrypted_content: "opaque-reasoning-fixture" };
+    const call = { type: "function_call", id: "fc-item", status: "completed", call_id: "read-call", name: "read", arguments: '{"path":"source.txt"}' };
+    const server = createServer((request, response) => {
+      void (async () => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        inputs.push(JSON.parse(Buffer.concat(chunks).toString()));
+        paths.push(request.url!);
+        const output = inputs.length === 1 ? [reasoning, call] : [{ type: "message", id: "msg-" + inputs.length, status: "completed", role: "assistant", content: [{ type: "output_text", text: "Done.", annotations: [] }] }];
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.end("data: " + JSON.stringify({ type: "response.completed", response: { status: "completed", output, usage: { input_tokens: 30, output_tokens: 10 } } }) + "\n\n");
+      })().catch(() => { response.writeHead(500); response.end(); });
+    });
+    server.listen(0, "127.0.0.1"); await once(server, "listening");
+    try {
+      const envFile = join(cwd, ".env.local");
+      const key = "local-responses-test-key";
+      await writeFile(envFile, `ARBOR_PROVIDER=responses\nARBOR_API_KEY=${key}\nARBOR_MODEL=gpt-6.1-sol\nARBOR_BASE_URL=http://127.0.0.1:${(server.address() as AddressInfo).port}/v1\n`);
+      const env = { ARBOR_PROVIDER: undefined };
+      const first = await invoke(["--cwd", cwd, "--read-only", "--json", "-p", "Read source.txt"], env, envFile);
+      expect(first.code, first.stderr).toBe(0);
+      const id = String(JSON.parse(first.stdout.trim().split("\n")[0]!).sessionId);
+      const resumed = await invoke(["--cwd", cwd, "--resume", id, "--read-only", "-p", "What did you inspect?"], env, envFile);
+      expect(resumed.code, resumed.stderr).toBe(0);
+      expect(inputs).toHaveLength(3);
+      expect(paths).toEqual(Array(3).fill("/v1/responses"));
+      for (const input of inputs) expect(input).toMatchObject({ model: "gpt-6.1-sol", stream: true, store: false });
+      for (const input of inputs.slice(1)) {
+        expect(input.input).toContainEqual(reasoning);
+        expect(input.input).toContainEqual(call);
+        expect(input.input.find((i) => i.type === "function_call_output")).toMatchObject({ call_id: "read-call", output: expect.stringContaining("responses evidence") });
+      }
+      const saved = await readFile(join(cwd, ".arbor/sessions", id + ".jsonl"), "utf8");
+      expect(JSON.parse(saved.split("\n")[0]!).provider).toMatchObject({ id: "responses", model: "gpt-6.1-sol", endpoint: expect.stringMatching(/\/v1\/responses$/) });
+      expect(saved).toContain("opaque-reasoning-fixture");
+      expect(saved + first.stdout + first.stderr + resumed.stdout + resumed.stderr).not.toContain(key);
+    } finally { await new Promise<void>((r) => server.close(() => r())); }
+  });
+
   it("requires an explicit Bailian model and reports the right credential variable", async () => {
     const cwd = await workspace();
     const missingKey = await invoke(["--cwd", cwd, "--provider", "bailian", "--model", "kimi-k3", "-p", "hello"]);
@@ -82,7 +126,7 @@ describe("CLI", () => {
         expect(input.messages.find((m) => m.role === "tool")?.content).toContain("bailian evidence");
       }
       const saved = await readFile(join(cwd, ".arbor/sessions", id + ".jsonl"), "utf8");
-      expect(JSON.parse(saved.split("\n")[0]!).provider).toEqual({ id: "bailian", model: "kimi-k3" });
+      expect(JSON.parse(saved.split("\n")[0]!).provider).toMatchObject({ id: "bailian", model: "kimi-k3", endpoint: expect.stringMatching(/\/compatible-mode\/v1\/chat\/completions$/) });
       expect(saved).toContain('"reasoningContent":"Inspect before answering."');
       expect(saved + first.stdout + first.stderr + resumed.stdout + resumed.stderr).not.toContain(env.DASHSCOPE_API_KEY);
     } finally { await new Promise<void>((r) => server.close(() => r())); }

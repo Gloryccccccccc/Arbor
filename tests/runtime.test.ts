@@ -4,10 +4,24 @@ import { describe, expect, it } from "vitest";
 import { createCodingSession } from "../src/coding-session.js";
 import { ToolRegistry } from "../src/tools/executor.js";
 import { abortable } from "../src/errors.js";
+import { ResponsesProvider } from "../src/model/responses.js";
 import type { ModelProvider, ToolMessage } from "../src/types.js";
 import { FakeProvider, reply, summary, workspace } from "./helpers.js";
 
 describe("coding runtime", () => {
+  it("refuses to replay a saved session to a different model endpoint", async () => {
+    const cwd = await workspace();
+    let contacted = false;
+    const options = { apiKey: "test", model: "gpt-6.1-sol", fetch: async () => { contacted = true; throw new Error("must not contact either endpoint"); } };
+    const session = await createCodingSession({ cwd, provider: new ResponsesProvider({ ...options, baseUrl: "https://first.example/v1" }) });
+    const id = session.id;
+    await session.dispose();
+    await expect(createCodingSession({ cwd, provider: new ResponsesProvider({ ...options, baseUrl: "https://second.example/v1" }), resume: id })).rejects.toMatchObject({ code: "session_endpoint" });
+    expect(contacted).toBe(false);
+    const resumed = await createCodingSession({ cwd, provider: new ResponsesProvider({ ...options, baseUrl: "https://first.example/v1/" }), resume: id });
+    await resumed.dispose();
+  });
+
   it("runs the read/check/edit/check loop against a real repository fixture", async () => {
     const cwd = await workspace();
     await writeFile(join(cwd, "timeout.mjs"), "export function timeout(options) { return options.timeout || 1000; }\n");
@@ -160,9 +174,15 @@ describe("manual context compaction", () => {
     const cwd = await workspace();
     await writeFile(join(cwd, "a"), "source");
     const provider = new FakeProvider([
-      reply("A"), reply("B"), reply("C"),
+      { ...reply("A"), reasoningContent: "provider-reasoning-fixture", providerState: { protocol: "responses", output: [{ type: "reasoning", encrypted_content: "opaque-protocol-fixture" }] } }, reply("B"), reply("C"),
       reply("", [{ id: "r", name: "read", arguments: { path: "a" } }]), reply("D"),
-      (request) => { expect(request.tools).toEqual([]); return reply(summary); },
+      (request) => {
+        expect(request.tools).toEqual([]);
+        expect(request.messages[0]?.content).toContain('"content":"A"');
+        expect(request.messages[0]?.content).not.toContain("opaque-protocol-fixture");
+        expect(request.messages[0]?.content).not.toContain("provider-reasoning-fixture");
+        return reply(summary);
+      },
       (request) => { expect(request.system).toContain("Never remove the async interface"); return reply("Continued"); },
     ]);
     const session = await createCodingSession({ cwd, provider });
@@ -178,6 +198,7 @@ describe("manual context compaction", () => {
       expect(projected[2]?.message.role).toBe("tool");
       const after = await readFile(session.store.path, "utf8");
       expect(after.startsWith(before)).toBe(true);
+      expect(after).toContain("opaque-protocol-fixture");
       expect(after).toContain('"type":"compaction"');
       expect((await session.prompt("Continue")).finalText).toBe("Continued");
     } finally { await session.dispose(); }

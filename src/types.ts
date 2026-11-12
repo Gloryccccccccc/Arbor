@@ -15,6 +15,8 @@ export interface AssistantMessage {
   toolCalls: ToolCall[];
   /** Provider-returned reasoning retained for multi-turn tool protocol compatibility. */
   reasoningContent?: string;
+  /** Complete provider output, including encrypted reasoning, replayed without server-side session storage. */
+  providerState?: { protocol: "responses"; output: Record<string, unknown>[] };
 }
 
 export interface ToolMessage {
@@ -54,6 +56,7 @@ export type ModelEvent =
 export interface ModelProvider {
   readonly id: string;
   readonly model: string;
+  readonly endpointIdentity?: string;
   readonly contextWindow: number;
   stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelEvent>;
 }

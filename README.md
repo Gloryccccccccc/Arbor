@@ -13,20 +13,37 @@ npm ci
 npm run build
 ```
 
-通过环境变量配置模型凭据。使用阿里云百炼北京地域的 PowerShell 示例：
+支持 Responses 和 Chat Completions 两种模型协议。使用 Responses 中转时，复制配置模板并在本机填写：
 
 ```powershell
-$env:ARBOR_PROVIDER = "bailian"
-$env:DASHSCOPE_API_KEY = "你的北京地域 API Key"
-$env:DASHSCOPE_MODEL = "qwen3.8-27b"
-npm run dev -- --cwd "E:\项目\your-repo" --thinking off
+Copy-Item .env.example .env.local
+# 编辑 .env.local，填写 API Base URL、模型 ID 和自己的 Key
+npm run dev:local -- --cwd "E:\项目\your-repo"
 ```
 
-百炼模式使用 OpenAI 兼容的 Chat Completions 协议，默认地址为 `https://dashscope.aliyuncs.com/compatible-mode/v1`（北京）。如控制台提供业务空间专属地址，通过 `DASHSCOPE_BASE_URL` 或 `--base-url` 配置，参见[官方接入说明](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)。模型 ID 按控制台填写，不自动补前缀或替换模型；例如 `kimi-k3` 与 `kimi/kimi-k3` 对应不同部署入口。
+`.env.local` 示例（已被 Git 忽略）：
 
-`--thinking off` 适合先调通支持此开关的模型；省略时遵循模型默认设置。思考模式的工具调用会保留服务商返回的 `reasoning_content`，用于后续请求及会话续接。可通过 `--request-timeout 120 --max-output-tokens 16384` 调整单轮等待时间和输出预算。具体模型支持项以[百炼工具调用文档](https://help.aliyun.com/zh/model-studio/qwen-function-calling)为准。使用试用额度时，可在控制台为目标模型开启“免费额度用完即停”，参见[额度说明](https://help.aliyun.com/zh/model-studio/new-free-quota/)。
+```dotenv
+ARBOR_PROVIDER=responses
+ARBOR_BASE_URL=https://your-provider.example/v1
+ARBOR_MODEL=gpt-6.1-sol
+ARBOR_API_KEY=在本机填写
+```
 
-也支持 `--provider deepseek`，凭据为 `DEEPSEEK_API_KEY`，默认模型 `deepseek-flash`，可通过 `DEEPSEEK_MODEL`、`DEEPSEEK_BASE_URL` 修改。未设置 `ARBOR_PROVIDER` 时默认使用此模式。通用 Chat Completions 服务使用 `--provider compatible`，配置 `ARBOR_API_KEY`、`ARBOR_MODEL`、`ARBOR_BASE_URL`。命令行 `--model`、`--base-url` 优先于环境变量，通用 `ARBOR_*` 设置优先于服务商对应设置。凭据不作为命令行参数或会话配置保存。
+Responses 模式发送 `POST <Base URL>/responses`，采用 `store: false`，在本地保留完整输出项与加密推理数据，以支持工具回传及会话续接。Agent 循环、工具与会话均由 Arbor 执行。协议细节见 [OpenAI 官方文档](https://developers.openai.com/api/docs/guides/function-calling)。
+
+`npm run dev` 仅使用已有环境变量；`npm run dev:local` 会加载仓库的 `.env.local`，进程中已有环境变量优先。构建后可用 `node --env-file=.env.local dist/cli.js` 启动。凭据不作为命令行参数或会话配置保存。
+
+| 模式 | 模型与地址 | Key |
+| --- | --- | --- |
+| `responses` | `ARBOR_MODEL`、`ARBOR_BASE_URL`，必填 | `ARBOR_API_KEY` |
+| `compatible` | 同上，调用 Chat Completions | `ARBOR_API_KEY` |
+| `bailian` | `DASHSCOPE_MODEL`，可选 `DASHSCOPE_BASE_URL`，默认北京 | `DASHSCOPE_API_KEY` |
+| `deepseek`（未配置时的默认模式） | `DEEPSEEK_MODEL`、`DEEPSEEK_BASE_URL`，默认 `deepseek-flash` | `DEEPSEEK_API_KEY` |
+
+命令行 `--provider`、`--model`、`--base-url` 优先于环境变量，通用 `ARBOR_*` 设置优先于服务商对应设置。模型 ID 按控制台填写，不自动补前缀或替换模型。
+
+百炼使用[兼容接口](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)，支持时可用 `--thinking off` 关闭思考；省略时遵循模型默认设置，工具调用需要的 `reasoning_content` 会随会话保留。具体支持项见[百炼工具调用文档](https://help.aliyun.com/zh/model-studio/qwen-function-calling)。所有模式均可用 `--request-timeout 120 --max-output-tokens 16384` 调整单轮等待时间和输出预算。
 
 ## 使用
 
@@ -53,19 +70,19 @@ node dist/cli.js --cwd /path/to/repo --resume <session-id>
 
 `--trusted` 显式允许本地写入和命令免逐次审批，适用于你信任的仓库。非交互模式没有审批处理器，未指定该选项时写入与命令会被拒绝。`--max-turns`、`--max-tool-calls`、`--max-duration` 限制执行预算。
 
-数据默认保存在工作区的 `.arbor/`；通过 `--data-dir` 或 `ARBOR_DATA_DIR` 修改。会话和产物包含任务文本、代码、工具输出及模型返回的推理字段，请按本地项目资料管理。续接会话需要使用相同服务商和模型 ID；切换模型请新建会话。
+数据默认保存在工作区的 `.arbor/`；通过 `--data-dir` 或 `ARBOR_DATA_DIR` 修改。会话和产物包含任务文本、代码、工具输出及模型返回的推理字段，请按本地项目资料管理。续接会话需要使用相同协议、服务商地址和模型 ID；切换模型请新建会话。
 
 ## SDK
 
 ```typescript
-import { createCodingSession, BailianProvider } from "arbor-harness";
+import { createCodingSession, ResponsesProvider } from "arbor-harness";
 
 const session = await createCodingSession({
   cwd: "/path/to/repo",
-  provider: new BailianProvider({
-    apiKey: process.env.DASHSCOPE_API_KEY!,
-    model: process.env.DASHSCOPE_MODEL!,
-    baseUrl: process.env.DASHSCOPE_BASE_URL,
+  provider: new ResponsesProvider({
+    apiKey: process.env.ARBOR_API_KEY!,
+    model: process.env.ARBOR_MODEL!,
+    baseUrl: process.env.ARBOR_BASE_URL!,
   }),
   permissions: "read-only",
 });

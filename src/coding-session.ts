@@ -68,11 +68,12 @@ export class CodingSession {
     const dataDir = resolve(options.dataDir ?? resolve(cwd, ".arbor"));
     await mkdir(dataDir, { recursive: true });
     const store = options.resume ? await SessionStore.resume(dataDir, options.resume) : await SessionStore.create(dataDir, {
-      cwd, system: options.system ?? SYSTEM_PROMPT, provider: { id: options.provider.id, model: options.provider.model },
+      cwd, system: options.system ?? SYSTEM_PROMPT, provider: { id: options.provider.id, model: options.provider.model, endpoint: options.provider.endpointIdentity },
     });
     try {
       if (store.header.cwd !== cwd) throw new ArborError("session_workspace", "Resume the session in its original workspace.");
       if (store.header.provider.id !== options.provider.id || store.header.provider.model !== options.provider.model) throw new ArborError("session_model", "This version resumes with the session's original provider and model.");
+      if (store.header.provider.endpoint !== undefined && store.header.provider.endpoint !== options.provider.endpointIdentity) throw new ArborError("session_endpoint", "Resume the session with its original model API endpoint.");
       const artifacts = new ArtifactStore(dataDir, store.header.id);
       const operations = await LocalOperations.create(cwd, dataDir, artifacts);
       return new CodingSession(options, store, operations, dataDir);

@@ -2,6 +2,7 @@ export { CodingSession, createCodingSession, type SessionOptions } from "./codin
 export { DeepSeekProvider, type DeepSeekOptions } from "./model/deepseek.js";
 export { BailianProvider, type BailianOptions } from "./model/bailian.js";
 export { ChatCompletionsProvider, type ChatCompletionsOptions } from "./model/chat-completions.js";
+export { ResponsesProvider, type ResponsesOptions } from "./model/responses.js";
 export { SessionStore, type SessionEntry, type SessionHeader } from "./session/store.js";
 export { ToolRegistry, type ToolDefinition, type ToolContext } from "./tools/executor.js";
 export { ArborError } from "./errors.js";

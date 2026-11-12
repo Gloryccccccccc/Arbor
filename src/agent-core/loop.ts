@@ -15,6 +15,7 @@ export interface LoopHost {
 function validateResponse(message: AssistantMessage): void {
   if (message.role !== "assistant" || typeof message.content !== "string" || !Array.isArray(message.toolCalls) || message.toolCalls.length > 32) throw new ArborError("provider_protocol", "Invalid assistant response.");
   if (message.reasoningContent !== undefined && typeof message.reasoningContent !== "string") throw new ArborError("provider_protocol", "Invalid provider reasoning field.");
+  if (message.providerState !== undefined && (!message.providerState || message.providerState.protocol !== "responses" || !Array.isArray(message.providerState.output))) throw new ArborError("provider_protocol", "Invalid provider state.");
   const ids = new Set<string>();
   for (const call of message.toolCalls) {
     if (!call.id || typeof call.id !== "string" || !call.name || typeof call.name !== "string" || ids.has(call.id) || !("arguments" in call)) throw new ArborError("provider_protocol", "Invalid or duplicate tool call identity.");

@@ -1,5 +1,6 @@
 import { createParser } from "eventsource-parser";
 import { ArborError, throwIfAborted } from "../errors.js";
+import { modelEndpoint } from "./endpoint.js";
 import type { AssistantMessage, ModelEvent, ModelProvider, ModelRequest, Usage } from "../types.js";
 
 export interface ChatCompletionsOptions {
@@ -16,6 +17,7 @@ export class ChatCompletionsProvider implements ModelProvider {
   readonly id: string;
   readonly model: string;
   readonly contextWindow: number;
+  readonly endpointIdentity: string;
   private readonly endpoint: string;
   private readonly options: ChatCompletionsOptions;
 
@@ -26,15 +28,8 @@ export class ChatCompletionsProvider implements ModelProvider {
     this.id = options.id ?? "compatible";
     this.model = options.model;
     this.contextWindow = options.contextWindow ?? 64_000;
-    let url: URL;
-    try { url = new URL(options.baseUrl); }
-    catch { throw new ArborError("configuration", "Specify a valid model API base URL."); }
-    const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-    if ((url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) || url.username || url.password || url.search || url.hash) {
-      throw new ArborError("configuration", "The model endpoint must use HTTPS (HTTP is allowed on loopback only), without credentials or query parameters.");
-    }
-    const base = url.toString().replace(/\/+$/, "");
-    this.endpoint = base.endsWith("/chat/completions") ? base : base + "/chat/completions";
+    this.endpoint = modelEndpoint(options.baseUrl, "chat/completions");
+    this.endpointIdentity = this.endpoint;
   }
 
   protected requestParameters(): Record<string, unknown> { return {}; }

@@ -39,5 +39,6 @@ export function systemWithNotes(system: string, notes: readonly string[]): strin
 }
 
 export function renderHistory(messages: readonly Message[]): string {
-  return JSON.stringify(messages);
+  // Opaque protocol state is replayed by the provider, not useful summary material.
+  return JSON.stringify(messages.map((message) => message.role === "assistant" ? { role: message.role, content: message.content, toolCalls: message.toolCalls } : message));
 }

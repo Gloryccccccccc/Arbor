@@ -6,6 +6,7 @@ import { createCodingSession, type CodingSession } from "./coding-session.js";
 import { DeepSeekProvider } from "./model/deepseek.js";
 import { BailianProvider } from "./model/bailian.js";
 import { ChatCompletionsProvider } from "./model/chat-completions.js";
+import { ResponsesProvider } from "./model/responses.js";
 import { SessionStore } from "./session/store.js";
 import { ArborError, errorInfo } from "./errors.js";
 import type { ApprovalHandler, HarnessEvent, ModelProvider } from "./types.js";
@@ -19,7 +20,7 @@ function positive(value: string): number {
 interface Options {
   cwd: string; dataDir?: string; resume?: string; prompt?: string; json?: boolean; list?: boolean;
   trusted?: boolean; readOnly?: boolean; model?: string; baseUrl?: string; maxTurns: number; maxToolCalls: number;
-  provider: "deepseek" | "bailian" | "compatible"; thinking: "auto" | "on" | "off";
+  provider: "deepseek" | "bailian" | "compatible" | "responses"; thinking: "auto" | "on" | "off";
   maxDuration: number; contextWindow: number; requestTimeout: number; maxOutputTokens: number;
 }
 
@@ -37,6 +38,9 @@ function modelProvider(options: Options): ModelProvider {
     enableThinking: options.thinking === "auto" ? undefined : options.thinking === "on",
   });
   if (options.provider === "compatible") return new ChatCompletionsProvider({
+    ...common, apiKey: process.env.ARBOR_API_KEY ?? "", model: model ?? "", baseUrl: baseUrl ?? "",
+  });
+  if (options.provider === "responses") return new ResponsesProvider({
     ...common, apiKey: process.env.ARBOR_API_KEY ?? "", model: model ?? "", baseUrl: baseUrl ?? "",
   });
   return new DeepSeekProvider({
@@ -136,7 +140,7 @@ async function main(): Promise<void> {
     .option("--json", "write structured events to stdout (requires --prompt)")
     .option("--trusted", "explicitly allow local write/edit/shell without per-call approval")
     .option("--read-only", "deny write/edit/shell tools")
-    .addOption(new Option("--provider <name>", "model provider").choices(["deepseek", "bailian", "compatible"]).env("ARBOR_PROVIDER").default("deepseek"))
+    .addOption(new Option("--provider <name>", "model provider").choices(["deepseek", "bailian", "compatible", "responses"]).env("ARBOR_PROVIDER").default("deepseek"))
     .option("--model <name>", "exact model ID (or ARBOR_MODEL / provider-specific environment variable)")
     .option("--base-url <url>", "API base URL (HTTPS, or loopback HTTP)")
     .addOption(new Option("--thinking <mode>", "Bailian enable_thinking; auto keeps the model default").choices(["auto", "on", "off"]).default("auto"))

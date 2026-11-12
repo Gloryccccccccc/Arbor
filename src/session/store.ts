@@ -14,7 +14,7 @@ export interface SessionHeader {
   cwd: string;
   createdAt: string;
   system: string;
-  provider: { id: string; model: string };
+  provider: { id: string; model: string; endpoint?: string };
 }
 interface Base { id: string; parentId: string | null; seq: number; timestamp: string }
 type Payload =
@@ -34,7 +34,8 @@ function validMessage(value: unknown): value is Message {
   if (typeof m.content !== "string") return false;
   if (m.role === "user") return true;
   if (m.role === "tool") return typeof m.toolCallId === "string" && typeof m.name === "string" && typeof m.isError === "boolean";
-  return m.role === "assistant" && (m.reasoningContent === undefined || typeof m.reasoningContent === "string") && Array.isArray(m.toolCalls) && m.toolCalls.every((c) => c && typeof c.id === "string" && typeof c.name === "string" && "arguments" in c);
+  const state = m.providerState as { protocol?: unknown; output?: unknown } | undefined;
+  return m.role === "assistant" && (m.reasoningContent === undefined || typeof m.reasoningContent === "string") && (state === undefined || !!state && state.protocol === "responses" && Array.isArray(state.output)) && Array.isArray(m.toolCalls) && m.toolCalls.every((c) => c && typeof c.id === "string" && typeof c.name === "string" && "arguments" in c);
 }
 
 export class SessionStore {
@@ -88,6 +89,7 @@ export class SessionStore {
       if (!header || header.type !== "session" || header.version !== 1 || header.id !== id || typeof header.cwd !== "string" || typeof header.system !== "string" || !header.provider || typeof header.provider.id !== "string" || typeof header.provider.model !== "string") {
         throw new ArborError("session_corrupt", "Unsupported or invalid session header.");
       }
+      if (header.provider.endpoint !== undefined && typeof header.provider.endpoint !== "string") throw new ArborError("session_corrupt", "Invalid saved model endpoint.");
       const entries: SessionEntry[] = [];
       const seen = new Set<string>();
       for (const value of records.slice(1)) {
