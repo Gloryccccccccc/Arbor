@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-import { Command, InvalidArgumentError } from "commander";
+import { Command, InvalidArgumentError, Option } from "commander";
 import { createInterface } from "node:readline";
 import { resolve } from "node:path";
 import { createCodingSession, type CodingSession } from "./coding-session.js";
 import { DeepSeekProvider } from "./model/deepseek.js";
+import { BailianProvider } from "./model/bailian.js";
+import { ChatCompletionsProvider } from "./model/chat-completions.js";
 import { SessionStore } from "./session/store.js";
 import { ArborError, errorInfo } from "./errors.js";
-import type { ApprovalHandler, HarnessEvent } from "./types.js";
+import type { ApprovalHandler, HarnessEvent, ModelProvider } from "./types.js";
 
 function positive(value: string): number {
   const number = Number(value);
@@ -16,8 +18,31 @@ function positive(value: string): number {
 
 interface Options {
   cwd: string; dataDir?: string; resume?: string; prompt?: string; json?: boolean; list?: boolean;
-  trusted?: boolean; readOnly?: boolean; model: string; baseUrl: string; maxTurns: number; maxToolCalls: number;
-  maxDuration: number; contextWindow: number;
+  trusted?: boolean; readOnly?: boolean; model?: string; baseUrl?: string; maxTurns: number; maxToolCalls: number;
+  provider: "deepseek" | "bailian" | "compatible"; thinking: "auto" | "on" | "off";
+  maxDuration: number; contextWindow: number; requestTimeout: number; maxOutputTokens: number;
+}
+
+function modelProvider(options: Options): ModelProvider {
+  if (options.thinking !== "auto" && options.provider !== "bailian") throw new ArborError("configuration", "--thinking is only supported with --provider bailian; leave auto for other providers.");
+  const common = {
+    contextWindow: options.contextWindow,
+    timeoutMs: options.requestTimeout * 1000,
+  };
+  const model = options.model ?? process.env.ARBOR_MODEL;
+  const baseUrl = options.baseUrl ?? process.env.ARBOR_BASE_URL;
+  if (options.provider === "bailian") return new BailianProvider({
+    ...common, apiKey: process.env.ARBOR_API_KEY ?? process.env.DASHSCOPE_API_KEY ?? "",
+    model: model ?? process.env.DASHSCOPE_MODEL ?? "", baseUrl: baseUrl ?? process.env.DASHSCOPE_BASE_URL,
+    enableThinking: options.thinking === "auto" ? undefined : options.thinking === "on",
+  });
+  if (options.provider === "compatible") return new ChatCompletionsProvider({
+    ...common, apiKey: process.env.ARBOR_API_KEY ?? "", model: model ?? "", baseUrl: baseUrl ?? "",
+  });
+  return new DeepSeekProvider({
+    ...common, apiKey: process.env.ARBOR_API_KEY ?? process.env.DEEPSEEK_API_KEY ?? "",
+    model: model ?? process.env.DEEPSEEK_MODEL, baseUrl: baseUrl ?? process.env.DEEPSEEK_BASE_URL,
+  });
 }
 
 function showEvent(event: HarnessEvent, interactive: boolean): void {
@@ -111,8 +136,12 @@ async function main(): Promise<void> {
     .option("--json", "write structured events to stdout (requires --prompt)")
     .option("--trusted", "explicitly allow local write/edit/shell without per-call approval")
     .option("--read-only", "deny write/edit/shell tools")
-    .option("--model <name>", "DeepSeek model", process.env.DEEPSEEK_MODEL ?? "deepseek-flash")
-    .option("--base-url <url>", "model endpoint (HTTPS, or loopback HTTP)", process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com")
+    .addOption(new Option("--provider <name>", "model provider").choices(["deepseek", "bailian", "compatible"]).env("ARBOR_PROVIDER").default("deepseek"))
+    .option("--model <name>", "exact model ID (or ARBOR_MODEL / provider-specific environment variable)")
+    .option("--base-url <url>", "API base URL (HTTPS, or loopback HTTP)")
+    .addOption(new Option("--thinking <mode>", "Bailian enable_thinking; auto keeps the model default").choices(["auto", "on", "off"]).default("auto"))
+    .option("--request-timeout <seconds>", "timeout per model request, including its stream", positive, 60)
+    .option("--max-output-tokens <tokens>", "maximum output tokens per model turn, including reasoning", positive, 4096)
     .option("--max-turns <number>", "maximum model turns per run", positive, 20)
     .option("--max-tool-calls <number>", "maximum tool calls per run", positive, 50)
     .option("--max-duration <seconds>", "maximum run duration", positive, 300)
@@ -127,11 +156,11 @@ async function main(): Promise<void> {
     process.stdout.write(JSON.stringify(await SessionStore.list(dataDir), null, 2) + "\n");
     return;
   }
-  const provider = new DeepSeekProvider({ apiKey: process.env.DEEPSEEK_API_KEY ?? "", model: options.model, baseUrl: options.baseUrl, contextWindow: options.contextWindow });
+  const provider = modelProvider(options);
   const factory = (approve?: ApprovalHandler) => createCodingSession({
     cwd, dataDir, provider, resume: options.resume,
     permissions: options.readOnly ? "read-only" : options.trusted ? "trusted" : "ask", approve,
-    budget: { maxTurns: options.maxTurns, maxToolCalls: options.maxToolCalls, maxDurationMs: options.maxDuration * 1000 },
+    budget: { maxTurns: options.maxTurns, maxToolCalls: options.maxToolCalls, maxDurationMs: options.maxDuration * 1000, maxOutputTokens: options.maxOutputTokens },
   });
   if (!options.prompt) {
     if (!process.stdin.isTTY) throw new ArborError("configuration", "Use --prompt when stdin is not an interactive terminal.");

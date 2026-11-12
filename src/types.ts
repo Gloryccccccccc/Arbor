@@ -13,6 +13,8 @@ export interface AssistantMessage {
   role: "assistant";
   content: string;
   toolCalls: ToolCall[];
+  /** Provider-returned reasoning retained for multi-turn tool protocol compatibility. */
+  reasoningContent?: string;
 }
 
 export interface ToolMessage {

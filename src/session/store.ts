@@ -34,7 +34,7 @@ function validMessage(value: unknown): value is Message {
   if (typeof m.content !== "string") return false;
   if (m.role === "user") return true;
   if (m.role === "tool") return typeof m.toolCallId === "string" && typeof m.name === "string" && typeof m.isError === "boolean";
-  return m.role === "assistant" && Array.isArray(m.toolCalls) && m.toolCalls.every((c) => c && typeof c.id === "string" && typeof c.name === "string" && "arguments" in c);
+  return m.role === "assistant" && (m.reasoningContent === undefined || typeof m.reasoningContent === "string") && Array.isArray(m.toolCalls) && m.toolCalls.every((c) => c && typeof c.id === "string" && typeof c.name === "string" && "arguments" in c);
 }
 
 export class SessionStore {

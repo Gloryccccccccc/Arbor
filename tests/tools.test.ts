@@ -95,13 +95,16 @@ describe("tool execution boundary", () => {
   });
   it("captures nonzero exit codes and strips model credentials from child environments", async () => {
     const { operations } = await setup();
-    const previous = process.env.DEEPSEEK_API_KEY;
-    process.env.DEEPSEEK_API_KEY = "should-not-inherit";
+    const variables = ["DEEPSEEK_API_KEY", "DASHSCOPE_API_KEY", "ARBOR_API_KEY"];
+    const previous = variables.map((key) => process.env[key]);
+    for (const key of variables) process.env[key] = "should-not-inherit";
     try {
-      const result = await operations.exec('node -e "console.log(Boolean(process.env.DEEPSEEK_API_KEY)); process.exit(7)"', 10_000, signal()) as { exitCode: number; stdout: string };
+      const result = await operations.exec('node -e "console.log(Boolean(process.env.DEEPSEEK_API_KEY || process.env.DASHSCOPE_API_KEY || process.env.ARBOR_API_KEY)); process.exit(7)"', 10_000, signal()) as { exitCode: number; stdout: string };
       expect(result.exitCode).toBe(7);
       expect(result.stdout.trim()).toBe("false");
-    } finally { if (previous === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = previous; }
+    } finally {
+      variables.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
+    }
   });
   it("decodes Unicode shell output on the current platform", async () => {
     const { operations } = await setup();

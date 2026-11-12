@@ -13,7 +13,7 @@ const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 function invoke(args: string[], env: NodeJS.ProcessEnv = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolveExit, reject) => {
     const child = spawn(process.execPath, ["--import", "tsx", cli, ...args], {
-      cwd: root, env: { ...process.env, DEEPSEEK_API_KEY: "", ...env }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+      cwd: root, env: { ...process.env, ARBOR_PROVIDER: "deepseek", ARBOR_API_KEY: undefined, ARBOR_MODEL: undefined, ARBOR_BASE_URL: undefined, DASHSCOPE_API_KEY: undefined, DASHSCOPE_MODEL: undefined, DASHSCOPE_BASE_URL: undefined, DEEPSEEK_MODEL: undefined, DEEPSEEK_BASE_URL: undefined, DEEPSEEK_API_KEY: "", ...env }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
     });
     let stdout = "", stderr = "";
     child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
@@ -35,6 +35,59 @@ async function body(request: IncomingMessage): Promise<{ messages: Record<string
 }
 
 describe("CLI", () => {
+  it("requires an explicit Bailian model and reports the right credential variable", async () => {
+    const cwd = await workspace();
+    const missingKey = await invoke(["--cwd", cwd, "--provider", "bailian", "--model", "kimi-k3", "-p", "hello"]);
+    expect(missingKey.code).toBe(1);
+    expect(missingKey.stderr).toContain("DASHSCOPE_API_KEY");
+    const missingModel = await invoke(["--cwd", cwd, "--provider", "bailian", "-p", "hello"], { DASHSCOPE_API_KEY: "test" });
+    expect(missingModel.code).toBe(1);
+    expect(missingModel.stderr).toContain("exact model ID");
+  });
+
+  it("round-trips Bailian reasoning through real tools, persistence and a resumed CLI process", async () => {
+    const cwd = await workspace();
+    await writeFile(join(cwd, "source.txt"), "bailian evidence");
+    const inputs: (Record<string, unknown> & { messages: Record<string, unknown>[] })[] = [];
+    const paths: string[] = [];
+    const server = createServer((request, response) => {
+      void (async () => {
+        paths.push(request.url!);
+        inputs.push(await body(request));
+        if (inputs.length === 1) {
+          response.writeHead(200, { "Content-Type": "text/event-stream" });
+          response.write("data: " + JSON.stringify({ choices: [{ delta: { reasoning_content: "Inspect before answering." } }] }) + "\n\n");
+          response.write("data: " + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "r", function: { name: "read", arguments: '{"path":"source.txt"}' } }] }, finish_reason: "tool_calls" }] }) + "\n\n");
+          response.end("data: [DONE]\n\n");
+        } else sse(response, "Done.");
+      })().catch(() => { response.writeHead(500); response.end(); });
+    });
+    server.listen(0, "127.0.0.1"); await once(server, "listening");
+    try {
+      const env = { ARBOR_PROVIDER: "bailian", DASHSCOPE_API_KEY: "bailian-local-test-key", DASHSCOPE_MODEL: "kimi-k3", DASHSCOPE_BASE_URL: `http://127.0.0.1:${(server.address() as AddressInfo).port}/compatible-mode/v1` };
+      const first = await invoke(["--cwd", cwd, "--read-only", "--json", "-p", "Read source.txt"], env);
+      expect(first.code, first.stderr).toBe(0);
+      const id = String(JSON.parse(first.stdout.trim().split("\n")[0]!).sessionId);
+      const resumed = await invoke(["--cwd", cwd, "--resume", id, "--read-only", "-p", "What did you inspect?"], env);
+      expect(resumed.code, resumed.stderr).toBe(0);
+      expect(inputs).toHaveLength(3);
+      expect(paths).toEqual(Array(3).fill("/compatible-mode/v1/chat/completions"));
+      for (const input of inputs) {
+        expect(input.model).toBe("kimi-k3");
+        expect(input).not.toHaveProperty("thinking");
+        expect(input).not.toHaveProperty("enable_thinking");
+      }
+      for (const input of inputs.slice(1)) {
+        expect(input.messages.find((m) => m.role === "assistant" && m.tool_calls)).toMatchObject({ reasoning_content: "Inspect before answering." });
+        expect(input.messages.find((m) => m.role === "tool")?.content).toContain("bailian evidence");
+      }
+      const saved = await readFile(join(cwd, ".arbor/sessions", id + ".jsonl"), "utf8");
+      expect(JSON.parse(saved.split("\n")[0]!).provider).toEqual({ id: "bailian", model: "kimi-k3" });
+      expect(saved).toContain('"reasoningContent":"Inspect before answering."');
+      expect(saved + first.stdout + first.stderr + resumed.stdout + resumed.stderr).not.toContain(env.DASHSCOPE_API_KEY);
+    } finally { await new Promise<void>((r) => server.close(() => r())); }
+  });
+
   it("shows help and lists sessions without model credentials", async () => {
     const cwd = await workspace();
     const help = await invoke(["--help"]);

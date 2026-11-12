@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { DeepSeekProvider } from "../src/model/deepseek.js";
-import type { ModelEvent, ModelRequest } from "../src/types.js";
+import { BailianProvider } from "../src/model/bailian.js";
+import { ChatCompletionsProvider } from "../src/model/chat-completions.js";
+import type { AssistantMessage, ModelEvent, ModelProvider, ModelRequest } from "../src/types.js";
 
 const request: ModelRequest = { system: "Rules", messages: [{ role: "user", content: "Read a file" }], tools: [{ name: "read", description: "Read", parameters: { type: "object" } }], maxOutputTokens: 1000 };
 const event = (value: unknown) => "data: " + JSON.stringify(value) + "\n\n";
@@ -11,13 +13,75 @@ function mockStream(text: string, chunkSize = 7): Response {
     controller.close();
   } }), { headers: { "content-type": "text/event-stream" } });
 }
-async function collect(provider: DeepSeekProvider): Promise<ModelEvent[]> {
+async function collect(provider: ModelProvider): Promise<ModelEvent[]> {
   const events: ModelEvent[] = [];
   for await (const item of provider.stream(request, new AbortController().signal)) events.push(item);
   return events;
 }
 
 describe("model streaming boundary", () => {
+  it("sends standard requests without DeepSeek or Bailian parameters to a compatible endpoint", async () => {
+    let sent: Record<string, unknown> = {};
+    let endpoint = "";
+    const provider = new ChatCompletionsProvider({ apiKey: "test", model: "my-exact-model", baseUrl: "https://example.com/v1/chat/completions/", fetch: async (url, init) => {
+      endpoint = String(url); sent = JSON.parse(String(init?.body));
+      return mockStream(event({ choices: [{ delta: { content: "done" }, finish_reason: "stop" }] }) + "data: [DONE]\n\n");
+    } });
+    await collect(provider);
+    expect(endpoint).toBe("https://example.com/v1/chat/completions");
+    expect(sent.model).toBe("my-exact-model");
+    expect(sent).not.toHaveProperty("thinking");
+    expect(sent).not.toHaveProperty("enable_thinking");
+  });
+
+  it.each(["kimi-k3", "kimi/kimi-k3", "qwen3.8-27b"])("preserves the configured Bailian model ID %s and Beijing endpoint", async (model) => {
+    let sent: Record<string, unknown> = {};
+    let endpoint = "";
+    const provider = new BailianProvider({ apiKey: "test", model, fetch: async (url, init) => {
+      endpoint = String(url); sent = JSON.parse(String(init?.body));
+      return mockStream(event({ choices: [{ delta: {}, finish_reason: "stop" }] }) + "data: [DONE]\n\n");
+    } });
+    await collect(provider);
+    expect(provider.id).toBe("bailian");
+    expect(endpoint).toBe("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions");
+    expect(sent.model).toBe(model);
+    expect(sent).not.toHaveProperty("thinking");
+    expect(sent).not.toHaveProperty("enable_thinking");
+  });
+
+  it("uses an explicit workspace endpoint and only opts into enable_thinking when configured", async () => {
+    let sent: Record<string, unknown> = {};
+    let endpoint = "";
+    const provider = new BailianProvider({ apiKey: "test", model: "configured-qwen-id", baseUrl: "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", enableThinking: false, fetch: async (url, init) => {
+      endpoint = String(url); sent = JSON.parse(String(init?.body));
+      return mockStream(event({ choices: [{ delta: {}, finish_reason: "stop" }] }) + "data: [DONE]\n\n");
+    } });
+    await collect(provider);
+    expect(endpoint).toBe("https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions");
+    expect(sent.enable_thinking).toBe(false);
+    expect(sent).not.toHaveProperty("thinking");
+  });
+
+  it("retains streamed reasoning across the full tool round trip without treating it as reply text", async () => {
+    const bodies: { messages: Record<string, unknown>[] }[] = [];
+    const toolStream = event({ choices: [{ delta: { reasoning_content: "Check " } }] })
+      + event({ choices: [{ delta: { reasoning_content: "the file.", tool_calls: [{ index: 0, id: "r", function: { name: "read", arguments: '{"path":"a"}' } }] }, finish_reason: "tool_calls" }] }) + "data: [DONE]\n\n";
+    const provider = new BailianProvider({ apiKey: "test", model: "kimi-k3", fetch: async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return mockStream(bodies.length === 1 ? toolStream : event({ choices: [{ delta: { content: "done" }, finish_reason: "stop" }] }) + "data: [DONE]\n\n", 1);
+    } });
+    const events = await collect(provider);
+    const last = events.at(-1)!;
+    expect(last.type).toBe("response");
+    if (last.type !== "response") throw new Error("missing response");
+    expect(last.message).toMatchObject({ content: "", reasoningContent: "Check the file." });
+    expect(events.filter((e) => e.type === "text_delta")).toEqual([]);
+    const assistant: AssistantMessage = last.message;
+    for await (const _ of provider.stream({ ...request, messages: [...request.messages, assistant, { role: "tool", toolCallId: "r", name: "read", content: "evidence", isError: false }] }, new AbortController().signal)) { /* consume */ }
+    expect(bodies[1]?.messages[2]).toMatchObject({ role: "assistant", reasoning_content: "Check the file.", tool_calls: [{ id: "r" }] });
+    expect(bodies[1]?.messages[3]).toMatchObject({ role: "tool", tool_call_id: "r" });
+  });
+
   it("assembles fragmented UTF-8 and tool arguments, and preserves usage", async () => {
     let body: Record<string, unknown> = {};
     const source = event({ choices: [{ delta: { content: "读取文件" } }] })
